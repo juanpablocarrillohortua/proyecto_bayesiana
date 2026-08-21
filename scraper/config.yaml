@@ -1,0 +1,219 @@
+# Structural configuration for the FincaRaiz scraper.
+#
+# This file holds everything that describes the SITE: where the data lives
+# inside the page, how URLs are shaped, and the controlled vocabularies.
+# Deployment tunables (rate limits, concurrency, proxy) live in the project
+# root config.py / .env instead -- see scraper/README.md.
+#
+# When the site changes, this is the only file you should need to edit.
+
+site:
+  base_url: https://www.fincaraiz.com.co
+  robots_url: https://www.fincaraiz.com.co/robots.txt
+  # No Crawl-delay directive exists in robots.txt as of 2026-08-02, so the
+  # delay in config.py is our own conservative choice, not a site directive.
+  default_crawl_delay_s: 2.0
+
+# ---------------------------------------------------------------------
+# Extraction strategy. Verified 2026-08-02: the site is a Next.js app and
+# every search page embeds the full result set in one JSON blob.
+# ---------------------------------------------------------------------
+extraction:
+  strategy: next_data_embedded_json
+  script_selector: 'script#__NEXT_DATA__'
+  # Dotted paths into the parsed __NEXT_DATA__ object.
+  pointers:
+    listings: props.pageProps.fetchResult.searchFast.data
+    paginator: props.pageProps.fetchResult.searchFast.paginatorInfo
+    apollo_state: props.pageProps.apolloState
+    build_id: buildId
+  paginator_keys:
+    current_page: currentPage
+    last_page: lastPage
+    per_page: perPage
+    total: total
+
+# ---------------------------------------------------------------------
+# URL construction.
+# ---------------------------------------------------------------------
+urls:
+  # Root shard: /arriendo/bogota/bogota-dc
+  root: '/{operation}/{city}/{state}'
+  # Type shard: /arriendo/apartamentos/bogota/bogota-dc
+  by_type: '/{operation}/{type_slug}/{city}/{state}'
+  # Type+neighbourhood shard: /arriendo/apartamentos/suba/bogota
+  by_type_neighbourhood: '/{operation}/{type_slug}/{neighbourhood}/{city}'
+  # Page 1 has no suffix; later pages append this.
+  page_suffix: '/pagina{page}'
+  # robots.txt Disallow patterns we must never generate. Multi-value
+  # filter URLs contain "-y-" and are explicitly disallowed.
+  forbidden_substrings:
+    - '-y-'
+
+operations:
+  arriendo: {slug: arriendo, id: 2, name: Arriendo}
+  venta: {slug: venta, id: 1, name: Venta}
+
+cities:
+  bogota:
+    slug: bogota
+    state: bogota-dc
+    display: "Bogota"
+    # Sharding axis 2. Stage 1 verifies each of these against the live
+    # site (follows redirects, checks the result count actually shrank)
+    # and silently drops any that do not resolve, so an out-of-date entry
+    # degrades coverage rather than corrupting data.
+    neighbourhoods:
+      - usaquen
+      - chapinero
+      - santa-fe
+      - san-cristobal
+      - usme
+      - tunjuelito
+      - bosa
+      - kennedy
+      - fontibon
+      - engativa
+      - suba
+      - barrios-unidos
+      - teusaquillo
+      - los-martires
+      - antonio-narino
+      - puente-aranda
+      - la-candelaria
+      - rafael-uribe-uribe
+      - ciudad-bolivar
+
+# ---------------------------------------------------------------------
+# Controlled vocabularies. Harvested from apolloState during recon; stage
+# 0 re-reads them live and writes the current copy to 00_discovery.json,
+# so these act as the offline fallback rather than the source of truth.
+# ---------------------------------------------------------------------
+property_types:
+  # id -> {slug used in URLs, canonical name for the output vocabulary}
+  1:  {slug: casas,            canonical: casa}
+  2:  {slug: apartamentos,     canonical: apartamento}
+  3:  {slug: lotes,            canonical: lote}
+  4:  {slug: locales,          canonical: local}
+  5:  {slug: oficinas,         canonical: oficina}
+  6:  {slug: fincas,           canonical: finca}
+  8:  {slug: parqueaderos,     canonical: parqueadero}
+  9:  {slug: consultorios,     canonical: consultorio}
+  10: {slug: edificios,        canonical: edificio}
+  14: {slug: apartaestudios,   canonical: apartaestudio}
+  15: {slug: cabanas,          canonical: cabana}
+  16: {slug: casas-campestres, canonical: casa_campestre}
+  17: {slug: casa-lotes,       canonical: casa_lote}
+  18: {slug: habitaciones,     canonical: habitacion}
+  19: {slug: bodegas,          canonical: bodega}
+
+# constStatesID -> human label. Source: apolloState "Filter:propStates".
+construction_states:
+  0: Usado
+  1: Nuevo
+
+# `antiquity` is a BRACKET CODE, not a number of years. Verified: code 5
+# renders as "mas de 30 anos" on the site while construction_year is null.
+# age_years is deliberately never derived from these -- see README.
+antiquity_brackets:
+  0: Para estrenar
+  1: Menos de 1 ano
+  2: 1 a 8 anos
+  3: 9 a 15 anos
+  4: 16 a 30 anos
+  5: mas de 30 anos
+
+currencies:
+  4: COP
+
+# ---------------------------------------------------------------------
+# Field mapping: output field <- dotted path in a listing object.
+# Stage 3 is driven entirely by this table; it hardcodes no paths.
+# ---------------------------------------------------------------------
+field_map:
+  listing_id: id
+  title: title
+  description: description
+  source_path: link
+  address_text: address
+  show_address: showAddress
+  price_amount: price.amount
+  price_currency_id: currency_id
+  price_currency_symbol: price.currency.name
+  admin_fee: commonExpenses.amount
+  admin_included: include_administration
+  area_built_m2: m2Built
+  area_private_m2: m2apto
+  area_terrain_m2: m2Terrain
+  bedrooms: bedrooms
+  bathrooms: bathrooms
+  parking_spaces: garage
+  stratum: stratum
+  floor: floor
+  floors_total: floorsCount
+  antiquity_code: antiquity
+  construction_year: construction_year
+  construction_state_id: constStatesID
+  property_type_id: property_type.id
+  property_type_name: property_type.name
+  operation_id: operation_type.id
+  operation_name: operation_type.name
+  latitude: latitude
+  longitude: longitude
+  location_point_wkt: locations.location_point
+  city: locations.city.0.name
+  locality: locations.locality.0.name
+  neighborhood: locations.neighbourhood.0.name
+  zone: locations.zone.0.name
+  published_at: created_at
+  updated_at: updated_at
+  agency_name: owner.name
+  agency_id: owner.id
+  publisher_type: owner.type
+  is_private_owner: owner.particular
+
+# `0` in these fields means "not stated" far more often than it means
+# zero. Stage 3 consults technicalSheet: if the sheet has no value for
+# the field, the 0 becomes null. Verified on listings where garage=0 and
+# floor=0 while the rendered sheet rows were blank.
+zero_means_null:
+  - parking_spaces
+  - floor
+  - stratum
+  - area_built_m2
+  - area_private_m2
+  - admin_fee
+
+# technicalSheet[].field -> the output field it corroborates.
+technical_sheet_map:
+  property_type_name: property_type_name
+  construction_state_name: construction_state
+  bathrooms: bathrooms
+  bedrooms: bedrooms
+  garage: parking_spaces
+  m2Built: area_built_m2
+  m2apto: area_private_m2
+  m2Terrain: area_terrain_m2
+  stratum: stratum
+  floor: floor
+  floorsAmount: floors_total
+  constructionYear: age_bracket_label
+
+# Never persisted. Personal contact data of private individuals is out of
+# scope per the project brief and Ley 1581 de 2012.
+drop_fields:
+  - owner.masked_phone
+  - owner.whatsapp_phone
+  - owner.has_whatsapp
+  - owner.subsidiaries
+
+# ---------------------------------------------------------------------
+# Stage 6 quality thresholds.
+# ---------------------------------------------------------------------
+qa:
+  coverage_warn_below: 0.80
+  geo_bbox:
+    bogota: {lat_min: 3.7, lat_max: 4.9, lon_min: -74.6, lon_max: -73.9}
+  price_sanity:
+    arriendo: {min: 100000, max: 500000000}
+    venta: {min: 10000000, max: 100000000000}
