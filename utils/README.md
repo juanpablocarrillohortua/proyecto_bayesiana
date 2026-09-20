@@ -1,11 +1,12 @@
 # utils/
 
-Shared helpers for the exploratory analysis. Four modules, each doing one job:
+Shared helpers for the exploratory analysis. Five modules, each doing one job:
 
 | Module | What it gives you |
 |---|---|
 | [plotting.py](plotting.py) | `EDAPlotter` — the whole chart set behind one class |
 | [triple_plot.py](triple_plot.py) | `normality_report` — a three-panel distribution diagnostic |
+| [cred_intervals.py](cred_intervals.py) | `credible_intervals` — one posterior, four interval methods, one table |
 | [geo.py](geo.py) | coordinate sanity checks against a Cundinamarca bounding box |
 | [map_graph.py](map_graph.py) | the listings drawn on an interactive map |
 
@@ -20,12 +21,16 @@ sys.path.insert(0, str(Path.cwd().parent))
 
 from utils.plotting import EDAPlotter
 from utils.triple_plot import normality_report
+from utils.cred_intervals import credible_intervals
 from utils.geo import count_outside_bogota, outside_bbox_mask
 from utils.map_graph import create_map
 ```
 
 Code and docstrings are in English; the text drawn on the figures is Spanish,
-because that is the language of whoever reads the chart.
+because that is the language of whoever reads the chart. The same rule covers
+the one module that returns a table meant to be read rather than indexed —
+[cred_intervals.py](cred_intervals.py) labels its columns in Spanish, unaccented
+so they stay typeable, and puts the accents in the values.
 
 ---
 
@@ -163,6 +168,106 @@ values breaks that.
 `transform` applied, `mean`, `median`, `std`, `skew`, `kurtosis`, the `test` name
 with its `statistic`, `p_value`, `is_normal` and `n_test`, the same four for the
 untransformed data when two tests ran, and `fig`.
+
+---
+
+## cred_intervals.py
+
+`credible_intervals(dist, level=0.95, ...)` takes a posterior as a frozen
+`scipy.stats` distribution and reports its credible interval computed four
+different ways, one row each, in a single Spanish table.
+
+```python
+from scipy.stats import beta
+
+posterior = beta(a_prior + k, b_prior + n - k)
+credible_intervals(posterior, level=0.95, plot=True)
+```
+
+| Method | What it does |
+|---|---|
+| `credible_intervals` | The table: four intervals for one posterior, or for several at once. |
+| `metropolis_hastings` | The sampler on its own, when you want the chain rather than the summary. |
+| `ChainDiagnostics` | R-hat, ESS and the acceptance rate of a run, with a `converged` flag. |
+
+### The four rows
+
+| `metodo` | How it gets there |
+|---|---|
+| Colas iguales | `ppf(α/2)` and `ppf(1−α/2)`. Exact, and the reference every other row is measured against. |
+| HDI (máxima densidad) | The narrowest interval holding the same mass, found by minimising its width. |
+| Cadenas de Markov (MCMC) | Random-walk Metropolis chains, then the same quantiles taken on the draws. |
+| Bootstrap percentil | A sample drawn from the posterior, resampled, and its quantiles averaged. |
+
+Pass `methods=` to run a subset — `("eti", "hdi")` is instant, the other two
+are the ones that take a moment.
+
+### Colas iguales and HDI are not the same interval
+
+On a symmetric posterior they agree to the last decimal. On a skewed one they do
+not, and `amplitud` is where you see it: for `gamma(2)` the equal-tailed interval
+spans 5.33 and the HDI 4.72, because the HDI is free to slide toward the mode
+instead of leaving 2.5% in each tail by construction.
+
+Which one you want is a modelling decision, not a default. Equal tails are
+invariant to a monotone reparameterisation and the HDI is not; the HDI is the
+shortest interval of that credibility and the equal-tailed one is not. The table
+gives you both rather than choosing.
+
+On a monotone density the HDI comes back one-sided. That is the right answer for
+such a density, not a failure of the search.
+
+### Why recompute what `ppf` already knows
+
+For a conjugate posterior the interval is available in closed form, so the MCMC
+and bootstrap rows are not doing inference — **they are checking the machinery
+against an answer that is already known.** That is what `error_abs` is for: it
+measures each row against the exact equal-tailed limits, so a sampler that has
+not converged shows up as a number in the table rather than as a plot nobody
+inspects.
+
+The chains carry their own verdict too. `diagnostico` prints split-R̂, the
+effective sample size and the acceptance rate, and a `UserWarning` fires when
+R̂ > 1.01 or ESS < 400 — the row is still reported, it is just not to be quoted
+at face value. All of it is computed from the draws directly; the project has no
+arviz, PyMC or Stan, and this module does not add one.
+
+### Several posteriors at once
+
+Pass a mapping instead of one distribution and every entry gets its own rows
+under a `distribucion` column — prior against posterior, or one entry per
+Dirichlet marginal:
+
+```python
+credible_intervals(
+    {
+        "Economico": beta(alpha_post[0], a0_post - alpha_post[0]),
+        "Normal": beta(alpha_post[1], a0_post - alpha_post[1]),
+        "Lujo": beta(alpha_post[2], a0_post - alpha_post[2]),
+    }
+)
+```
+
+A multivariate `dirichlet(alpha)` is rejected rather than guessed at: it has no
+`ppf`. Its Beta marginals, `Beta(αᵢ, α₀ − αᵢ)`, are what the error message points
+you to. A discrete distribution is accepted for `eti` and `bootstrap` and refused
+for the other two, which need a density.
+
+### The figure
+
+`plot=True` draws the posterior with the intervals stacked underneath it, one
+bar per method with its limits annotated, and a panel per distribution when a
+mapping was passed. It comes back in **`df.attrs["fig"]`**, not as a second
+return value, so the call still ends a notebook cell with the table and
+`df.attrs["fig"].savefig(...)` still works.
+
+### What comes back
+
+A DataFrame with `metodo`, `nivel`, `limite_inferior`, `limite_superior`,
+`amplitud`, `ee_inferior` and `ee_superior` (the Monte-Carlo standard error of
+each limit, `0.0` on the two exact rows), `error_abs`, `n_muestras`, and
+`diagnostico` — the one-line verdict for that row. `distribucion` leads the
+columns when a mapping was passed.
 
 ---
 

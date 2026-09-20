@@ -152,11 +152,17 @@ global matplotlib state and callers pass no styling arguments. Public surface is
 `corr_heatmap`, `triple_plot`, `summary_grid`, `report_numeric`,
 `run_normality_test`. Add plots as methods there rather than starting a second
 plotting module. [utils/triple_plot.py](utils/triple_plot.py) holds the
-standalone `normality_report` panel; [utils/geo.py](utils/geo.py) holds the
+standalone `normality_report` panel; [utils/cred_intervals.py](utils/cred_intervals.py)
+holds `credible_intervals`, which summarises a frozen `scipy.stats` posterior as
+one Spanish table of four intervals — equal-tailed and HDI in closed form,
+Metropolis-Hastings chains and a percentile bootstrap beside them, with
+`error_abs` measuring the two sampled rows against the exact ones (split-R̂ and
+ESS are computed in the module; **it adds no arviz/PyMC/Stan dependency**);
+[utils/geo.py](utils/geo.py) holds the
 Cundinamarca bounding-box coordinate sanity check; [utils/map_graph.py](utils/map_graph.py)
 holds `create_map`, a Folium marker-cluster map (one marker per row, so filter
 before calling it on all 31k listings). [utils/README.md](utils/README.md)
-documents all four.
+documents all five.
 
 Notebooks run from `notebooks/`, so they prepend the parent directory to
 `sys.path` before `from utils... import ...`. Figure text is Spanish (the
