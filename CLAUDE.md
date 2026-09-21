@@ -153,11 +153,18 @@ global matplotlib state and callers pass no styling arguments. Public surface is
 `run_normality_test`. Add plots as methods there rather than starting a second
 plotting module. [utils/triple_plot.py](utils/triple_plot.py) holds the
 standalone `normality_report` panel; [utils/cred_intervals.py](utils/cred_intervals.py)
-holds `credible_intervals`, which summarises a frozen `scipy.stats` posterior as
-one Spanish table of four intervals — equal-tailed and HDI in closed form,
-Metropolis-Hastings chains and a percentile bootstrap beside them, with
-`error_abs` measuring the two sampled rows against the exact ones (split-R̂ and
-ESS are computed in the module; **it adds no arviz/PyMC/Stan dependency**);
+holds `credible_intervals`, a generalization of the course's interval script
+from Gamma to any frozen `scipy.stats` distribution: it returns that script's
+2×2 grid — `fuente` ∈ {Exacto, MCMC} × `tipo` ∈ {Colas Iguales, HPDI} — as one
+Spanish table, by calling the four public one-per-method functions
+(`colas_iguales_exacto`, `hpdi_exacto`, `colas_iguales_mcmc`, `hpdi_mcmc`), each
+of which takes the distribution and the level and computes its interval alone.
+**Its shape is fixed by the script, not by convenience** — the exact HPDI must
+keep using `scipy.optimize.minimize` on `ppf(cdf(lb) + prob) - lb`, and `MCMC`
+means i.i.d. `dist.rvs`, not a Markov chain. **Deliberately has no input
+validation and no test**, so nothing catches a drift from the script
+automatically; re-check against it by hand after touching the four methods. The
+figure helpers below them are not to be restyled. No arviz/PyMC/Stan;
 [utils/geo.py](utils/geo.py) holds the
 Cundinamarca bounding-box coordinate sanity check; [utils/map_graph.py](utils/map_graph.py)
 holds `create_map`, a Folium marker-cluster map (one marker per row, so filter

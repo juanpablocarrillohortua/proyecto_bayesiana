@@ -6,7 +6,7 @@ Shared helpers for the exploratory analysis. Five modules, each doing one job:
 |---|---|
 | [plotting.py](plotting.py) | `EDAPlotter` — the whole chart set behind one class |
 | [triple_plot.py](triple_plot.py) | `normality_report` — a three-panel distribution diagnostic |
-| [cred_intervals.py](cred_intervals.py) | `credible_intervals` — one posterior, four interval methods, one table |
+| [cred_intervals.py](cred_intervals.py) | `credible_intervals` — a posterior's intervals, exact and simulated, in one table |
 | [geo.py](geo.py) | coordinate sanity checks against a Cundinamarca bounding box |
 | [map_graph.py](map_graph.py) | the listings drawn on an interactive map |
 
@@ -173,101 +173,150 @@ untransformed data when two tests ran, and `fig`.
 
 ## cred_intervals.py
 
-`credible_intervals(dist, level=0.95, ...)` takes a posterior as a frozen
-`scipy.stats` distribution and reports its credible interval computed four
-different ways, one row each, in a single Spanish table.
+`credible_intervals(dist, nivel=0.95, ...)` takes a posterior as a frozen
+`scipy.stats` distribution and returns the 2×2 grid of intervals the course
+script prints, as one Spanish table.
 
 ```python
-from scipy.stats import beta
+from scipy.stats import gamma
 
-posterior = beta(a_prior + k, b_prior + n - k)
-credible_intervals(posterior, level=0.95, plot=True)
+posterior = gamma(alpha_post, scale=1 / beta_post)
+credible_intervals(posterior, nivel=0.95, plot=True)
 ```
 
-| Method | What it does |
+```
+fuente          tipo  nivel  limite_inferior  limite_superior    ancho
+Exacto Colas Iguales   0.95         0.242209         5.571643 5.329434
+Exacto          HPDI   0.95         0.042363         4.765168 4.722805
+  MCMC Colas Iguales   0.95         0.240902         5.602988 5.362086
+  MCMC          HPDI   0.95         0.045158         4.772519 4.727361
+```
+
+Two axes, four rows. `fuente` is where the numbers come from and `tipo` is which
+interval:
+
+| `fuente` | Where it reads |
 |---|---|
-| `credible_intervals` | The table: four intervals for one posterior, or for several at once. |
-| `metropolis_hastings` | The sampler on its own, when you want the chain rather than the summary. |
-| `ChainDiagnostics` | R-hat, ESS and the acceptance rate of a run, with a `converged` flag. |
+| Exacto | The distribution's own `ppf` and `cdf`. Deterministic. |
+| MCMC | A sample of `n_sim` draws simulated from it. |
 
-### The four rows
-
-| `metodo` | How it gets there |
+| `tipo` | Which interval |
 |---|---|
-| Colas iguales | `ppf(α/2)` and `ppf(1−α/2)`. Exact, and the reference every other row is measured against. |
-| HDI (máxima densidad) | The narrowest interval holding the same mass, found by minimising its width. |
-| Cadenas de Markov (MCMC) | Random-walk Metropolis chains, then the same quantiles taken on the draws. |
-| Bootstrap percentil | A sample drawn from the posterior, resampled, and its quantiles averaged. |
+| Colas Iguales | Equal mass left outside on each side: `ppf(α/2)`, `ppf(1−α/2)` exactly, percentiles on the draws. |
+| HPDI | The narrowest interval of that credibility: a minimisation of the width exactly, a sorted-window scan on the draws. |
 
-Pass `methods=` to run a subset — `("eti", "hdi")` is instant, the other two
-are the ones that take a moment.
+### Each method is its own function
 
-### Colas iguales and HDI are not the same interval
+The four cells are public and self-contained: give one the distribution and the
+level and it computes that interval on its own, returning a plain
+`(inferior, superior)` tuple. `credible_intervals` does nothing but call the
+four and assemble the frame.
+
+| Function | What it does |
+|---|---|
+| `colas_iguales_exacto(dist, nivel)` | `ppf` on each tail. |
+| `hpdi_exacto(dist, nivel)` | Minimises the width with `scipy.optimize.minimize`. |
+| `colas_iguales_mcmc(dist, nivel, n_sim, random_state)` | Percentiles of a simulated sample. |
+| `hpdi_mcmc(dist, nivel, n_sim, random_state)` | Sliding window over the sorted sample. |
+
+```python
+inf, sup = hpdi_exacto(posterior, 0.95)
+```
+
+The two `mcmc` functions each draw their own sample. They share a default
+`random_state`, so called with the defaults they draw the *same* sample and
+their two rows stay mutually consistent — but neither depends on the other.
+
+### It is the course script, generalised
+
+Every piece corresponds to one statement of the reference implementation, with
+Gamma swapped for whatever you pass:
+
+| Script | Module |
+|---|---|
+| `stats.gamma.ppf(0.025, a=α, scale=1/β)` | `colas_iguales_exacto` |
+| `interval_width` + `minimize(..., bounds=[(0, ppf(0.05))])` | `hpdi_exacto`, same call, `ancho` nested inside |
+| `np.random.gamma(shape=α, scale=1/β, size=100000)` | `dist.rvs(n_sim, random_state=rng)` |
+| `np.percentile(samples, 2.5)` | `colas_iguales_mcmc` |
+| `calc_hpdi_mcmc(samples, 0.95)` | `hpdi_mcmc`, scan inlined |
+
+Defaults are the script's own numbers: `n_sim=100_000`, `random_state=42`. On
+the script's own Gamma the two `Exacto` rows come back **bit-identical** to it.
+
+The optimiser's bounds are the script's, `(ppf(0), ppf(1 − nivel))`. `ppf(0)` is
+`0.0` for Gamma and Beta — exactly the literal `0` the script writes — and
+`-inf` for a distribution on the real line, which L-BFGS-B reads as "unbounded
+below", so it generalises for free. The upper limit is still recomputed as
+`ppf(cdf(lb) + nivel)` after `minimize` returns, rather than read off the
+optimiser, exactly as the script does.
+
+**There is no input validation and no self-test.** Passing something that is not
+a frozen distribution raises whatever scipy raises, and nothing in the repo
+checks the module against the script any more — that is the deliberate cost of
+keeping the file to the basic code.
+
+### Colas Iguales and HPDI are not the same interval
 
 On a symmetric posterior they agree to the last decimal. On a skewed one they do
-not, and `amplitud` is where you see it: for `gamma(2)` the equal-tailed interval
-spans 5.33 and the HDI 4.72, because the HDI is free to slide toward the mode
+not, and `ancho` is where you see it: for `gamma(2)` the equal-tailed interval
+spans 5.33 and the HPDI 4.72, because the HPDI is free to slide toward the mode
 instead of leaving 2.5% in each tail by construction.
 
 Which one you want is a modelling decision, not a default. Equal tails are
-invariant to a monotone reparameterisation and the HDI is not; the HDI is the
+invariant to a monotone reparameterisation and the HPDI is not; the HPDI is the
 shortest interval of that credibility and the equal-tailed one is not. The table
 gives you both rather than choosing.
 
-On a monotone density the HDI comes back one-sided. That is the right answer for
-such a density, not a failure of the search.
+On a monotone density the HPDI comes back one-sided. That is the right answer
+for such a density, not a failure of the search.
 
-### Why recompute what `ppf` already knows
+### Why simulate what `ppf` already knows
 
-For a conjugate posterior the interval is available in closed form, so the MCMC
-and bootstrap rows are not doing inference — **they are checking the machinery
-against an answer that is already known.** That is what `error_abs` is for: it
-measures each row against the exact equal-tailed limits, so a sampler that has
-not converged shows up as a number in the table rather than as a plot nobody
-inspects.
+For a conjugate posterior both intervals are available in closed form, so the
+`MCMC` rows are not doing inference — **they show that the simulation lands where
+the closed form already is.** Read the table down each `tipo`: the two rows
+should agree, and the size of the gap is how much the sample size is costing you.
 
-The chains carry their own verdict too. `diagnostico` prints split-R̂, the
-effective sample size and the acceptance rate, and a `UserWarning` fires when
-R̂ > 1.01 or ESS < 400 — the row is still reported, it is just not to be quoted
-at face value. All of it is computed from the draws directly; the project has no
-arviz, PyMC or Stan, and this module does not add one.
+Worth knowing when you read that gap: **the two estimators are not equally
+noisy.** At `n_sim=100_000`, over 40 seeds, the simulated equal-tailed limit has
+a standard deviation of about 0.7% of the posterior's own sd, while the HPDI
+limit has about 2.0% — roughly threefold, because the sorted-window scan picks a
+minimum over many near-equal widths and a different draw moves which window wins.
+An `MCMC HPDI` row that sits further from its `Exacto` twin than the equal-tailed
+row does is the expected behaviour, not a symptom.
 
-### Several posteriors at once
+### Several posteriors
 
-Pass a mapping instead of one distribution and every entry gets its own rows
-under a `distribucion` column — prior against posterior, or one entry per
-Dirichlet marginal:
+One call takes one distribution. For the three Dirichlet marginals, call it
+three times and concatenate:
 
 ```python
-credible_intervals(
-    {
-        "Economico": beta(alpha_post[0], a0_post - alpha_post[0]),
-        "Normal": beta(alpha_post[1], a0_post - alpha_post[1]),
-        "Lujo": beta(alpha_post[2], a0_post - alpha_post[2]),
-    }
+pd.concat(
+    [
+        credible_intervals(beta(a, a0_post - a)).assign(categoria=nombre)
+        for nombre, a in zip(categorias, alpha_post)
+    ],
+    ignore_index=True,
 )
 ```
 
-A multivariate `dirichlet(alpha)` is rejected rather than guessed at: it has no
-`ppf`. Its Beta marginals, `Beta(αᵢ, α₀ − αᵢ)`, are what the error message points
-you to. A discrete distribution is accepted for `eti` and `bootstrap` and refused
-for the other two, which need a density.
+A multivariate `dirichlet(alpha)` has no `ppf`, so it cannot be passed directly;
+its Beta marginals, `Beta(αᵢ, α₀ − αᵢ)`, are what to build from it — which is
+what the notebook already does to plot them.
 
 ### The figure
 
-`plot=True` draws the posterior with the intervals stacked underneath it, one
-bar per method with its limits annotated, and a panel per distribution when a
-mapping was passed. It comes back in **`df.attrs["fig"]`**, not as a second
-return value, so the call still ends a notebook cell with the table and
-`df.attrs["fig"].savefig(...)` still works.
+`plot=True` draws the posterior with the four intervals stacked underneath it,
+one bar per row with its limits annotated. It comes back in
+**`df.attrs["fig"]`**, not as a second return value, so the call still ends a
+notebook cell with the table and `df.attrs["fig"].savefig(...)` still works.
 
 ### What comes back
 
-A DataFrame with `metodo`, `nivel`, `limite_inferior`, `limite_superior`,
-`amplitud`, `ee_inferior` and `ee_superior` (the Monte-Carlo standard error of
-each limit, `0.0` on the two exact rows), `error_abs`, `n_muestras`, and
-`diagnostico` — the one-line verdict for that row. `distribucion` leads the
-columns when a mapping was passed.
+A DataFrame with `fuente`, `tipo`, `nivel`, `limite_inferior`, `limite_superior`
+and `ancho` — the script's own columns, nothing more. Four rows, always. The
+four functions called on their own return a plain `(inferior, superior)` tuple
+instead.
 
 ---
 
